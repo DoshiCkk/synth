@@ -43,9 +43,19 @@ private:
     void handleMidi(const juce::uint8* data, int numBytes) noexcept;
 
     // Указатели на атомарные значения параметров: чтение из аудиопотока без блокировок.
+    struct OscPointers
+    {
+        std::atomic<float>* wave = nullptr;
+        std::atomic<float>* octave = nullptr;
+        std::atomic<float>* semitone = nullptr;
+        std::atomic<float>* fine = nullptr;
+        std::atomic<float>* pulseWidth = nullptr;
+        std::atomic<float>* level = nullptr;
+    };
+
     struct ParamPointers
     {
-        std::atomic<float>* oscALevel = nullptr;
+        OscPointers oscA, oscB;
         std::atomic<float>* ampAttack = nullptr;
         std::atomic<float>* ampDecay = nullptr;
         std::atomic<float>* ampSustain = nullptr;

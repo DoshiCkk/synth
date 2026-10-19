@@ -1,0 +1,5 @@
+/build/
+/out/
+/render_out/
+/.vs/
+*.user

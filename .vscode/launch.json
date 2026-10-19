@@ -1,0 +1,25 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug Standalone",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/build/Neutron_artefacts/Debug/Standalone/NEUTRON.exe",
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "stopAtEntry": false,
+      "environment": []
+    },
+    {
+      "name": "Debug in FL Studio",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "C:\\Program Files\\Image-Line\\FL Studio 21\\FL64.exe",
+      "args": [],
+      "cwd": "C:\\Program Files\\Image-Line\\FL Studio 21",
+      "stopAtEntry": false,
+      "environment": []
+    }
+  ]
+}

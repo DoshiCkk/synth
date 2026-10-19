@@ -20,6 +20,17 @@
       "cwd": "C:\\Program Files\\Image-Line\\FL Studio 21",
       "stopAtEntry": false,
       "environment": []
+    },
+    {
+      "name": "Run render_test",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/build/Debug/render_test.exe",
+      "args": ["render_out"],
+      "cwd": "${workspaceFolder}",
+      "stopAtEntry": false,
+      "environment": [],
+      "console": "integratedTerminal"
     }
   ]
 }

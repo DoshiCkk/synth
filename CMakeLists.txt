@@ -53,3 +53,12 @@ target_link_libraries(Neutron
         juce::juce_recommended_config_flags
         juce::juce_recommended_lto_flags
         juce::juce_recommended_warning_flags)
+
+message(STATUS "NEUTRON VST3 -> ${CMAKE_BINARY_DIR}/Neutron_artefacts/<Debug|Release>/VST3/NEUTRON.vst3")
+
+# CLI-рендер тестовых нот в WAV. Только чистый C++ из Source/dsp, без JUCE.
+add_executable(render_test tools/render_test.cpp)
+target_include_directories(render_test PRIVATE Source)
+target_compile_options(render_test PRIVATE
+    $<$<CXX_COMPILER_ID:MSVC>:/W4 /permissive->
+    $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wall -Wextra -Wpedantic>)

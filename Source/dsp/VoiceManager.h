@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cmath>
+#include <cstdint>
 
 #include "Smoother.h"
 #include "Voice.h"
@@ -33,28 +34,56 @@ struct SynthParams
     EnvelopeSettings filterEnv;
 
     EnvelopeSettings ampEnv;
-    double masterGain = 0.5; // линейный
+    double velToAmp = 0.0;       // 0..1
+
+    double pitchBendRange = 2.0; // полутона
+    double masterGain = 0.5;     // линейный
 };
 
-// Пока один голос (шаг 4). Полифония и кража — на шаге 5.
+// Распределение нот по 8 голосам. Своя логика вместо juce::Synthesiser — на этапе 2
+// сюда добавятся mono/legato/глайд, которым нужен полный контроль над голосами.
+//
+// Порядок выбора голоса для новой ноты:
+//   1. Та же нота уже звучит (держится или в release) → retrigger этого же голоса.
+//   2. Свободный голос — тот, который дольше всех не использовался (ротация, как у
+//      аналоговых полифоников: хвосты релиза не обрываются без нужды).
+//   3. Кража: сначала голос в release (отпущенный раньше всех), иначе самый старый.
+//      Украденный голос затухает за 4 мс и только потом берёт новую ноту.
 class VoiceManager
 {
 public:
+    static constexpr int kNumVoices = 8;
+
     void prepare(double sampleRate) noexcept
     {
-        voice.prepare(sampleRate);
-        voice.setInitialPhases(0.0, 0.37);
+        for (int i = 0; i < kNumVoices; ++i)
+        {
+            auto& v = voices[static_cast<size_t>(i)];
+            v.prepare(sampleRate);
+            // Разные стартовые фазы у голосов: аккорд не начинается с одинакового «щелчка»
+            // всех пил в одной фазе. Дробные части золотого сечения — равномерный разброс.
+            v.setInitialPhases(std::fmod(i * 0.618034, 1.0), std::fmod(i * 0.618034 + 0.37, 1.0));
+        }
         for (auto* s : smoothers())
             s->prepare(sampleRate, kSmoothingSeconds);
         firstParams = true;
     }
 
-    void reset() noexcept { voice.reset(); }
+    void reset() noexcept
+    {
+        for (auto& v : voices)
+            v.reset();
+        bendNormalized = 0.0;
+        pitchBend.reset(0.0);
+    }
 
     void setParams(const SynthParams& p) noexcept
     {
-        voice.setWaveforms(p.oscA.wave, p.oscB.wave);
-        voice.setEnvelopes(p.filterEnv, p.ampEnv);
+        for (auto& v : voices)
+        {
+            v.setWaveforms(p.oscA.wave, p.oscB.wave);
+            v.setEnvelopes(p.filterEnv, p.ampEnv);
+        }
 
         // Октава и полутоны переключаются мгновенно (как галетный переключатель),
         // плавно идёт только fine — иначе смена октавы звучала бы как мини-глайд.
@@ -75,7 +104,10 @@ public:
         filterEnvAmount.setTarget(p.filterEnvAmount);
         keyTrack.setTarget(p.keyTrack);
         velToFilterEnv.setTarget(p.velToFilterEnv);
+        velToAmp.setTarget(p.velToAmp);
 
+        bendRange = p.pitchBendRange;
+        pitchBend.setTarget(bendNormalized * bendRange);
         masterGain.setTarget(p.masterGain);
 
         if (firstParams) // после prepare не «въезжаем» в значения из нуля
@@ -86,12 +118,73 @@ public:
         }
     }
 
-    void noteOn(int note, float velocity) noexcept { voice.noteOn(note, velocity); }
+    void noteOn(int note, float velocity) noexcept
+    {
+        const auto order = ++eventCounter;
+
+        for (auto& v : voices)
+            if (v.isActive() && v.getNote() == note)
+            {
+                v.start(note, velocity, order);
+                return;
+            }
+
+        Voice* chosen = nullptr;
+        for (auto& v : voices)
+            if (!v.isActive() && (chosen == nullptr || v.getNoteOnOrder() < chosen->getNoteOnOrder()))
+                chosen = &v;
+
+        if (chosen != nullptr)
+        {
+            chosen->start(note, velocity, order);
+            return;
+        }
+
+        findVoiceToSteal().steal(note, velocity, order);
+    }
 
     void noteOff(int note) noexcept
     {
-        if (voice.getNote() == note)
-            voice.noteOff();
+        const auto order = ++eventCounter;
+        for (auto& v : voices)
+            if (v.isActive() && v.isGateOn() && v.getNote() == note)
+                v.release(order);
+    }
+
+    void allNotesOff() noexcept
+    {
+        const auto order = ++eventCounter;
+        for (auto& v : voices)
+            if (v.isActive() && v.isGateOn())
+                v.release(order);
+    }
+
+    void allSoundOff() noexcept
+    {
+        for (auto& v : voices)
+            if (v.isActive())
+                v.fadeOut();
+    }
+
+    // normalized: −1..+1 (14-битное колесо питча)
+    void setPitchBend(double normalized) noexcept
+    {
+        bendNormalized = normalized;
+        pitchBend.setTarget(bendNormalized * bendRange);
+    }
+
+    // Mod wheel (CC1) пока только запоминаем — подключим на этапе 2 (Poly-Mod/LFO).
+    void setModWheel(double value) noexcept { modWheel = value; }
+    double getModWheel() const noexcept { return modWheel; }
+
+    const Voice& getVoice(int index) const noexcept { return voices[static_cast<size_t>(index)]; }
+
+    int getNumActiveVoices() const noexcept
+    {
+        int n = 0;
+        for (const auto& v : voices)
+            n += v.isActive() ? 1 : 0;
+        return n;
     }
 
     // Рендер в моно-буфер (перезаписывает). Вызывается кусками между MIDI-событиями.
@@ -100,6 +193,7 @@ public:
         for (int i = 0; i < numSamples; ++i)
         {
             VoiceFrame frame;
+            frame.pitchBend = pitchBend.next();
             frame.oscAPitchOffset = oscACoarse + oscAFine.next();
             frame.oscBPitchOffset = oscBCoarse + oscBFine.next();
             frame.oscAPulseWidth = oscAPulseWidth.next();
@@ -111,28 +205,68 @@ public:
             frame.filterEnvAmount = filterEnvAmount.next();
             frame.keyTrack = keyTrack.next();
             frame.velToFilterEnv = velToFilterEnv.next();
+            frame.velToAmp = velToAmp.next();
             const float gain = static_cast<float>(masterGain.next());
 
-            const float sample = voice.isActive() ? voice.process(frame) : 0.0f;
-            out[i] = sample * gain;
+            // Молчащие голоса не считаются вовсе: на тишине после релиза CPU ≈ 0.
+            float sum = 0.0f;
+            for (auto& v : voices)
+                if (v.isActive())
+                    sum += v.process(frame);
+
+            out[i] = sum * gain;
         }
     }
 
 private:
     static constexpr double kSmoothingSeconds = 0.02;
 
-    std::array<LinearSmoother*, 12> smoothers() noexcept
+    Voice& findVoiceToSteal() noexcept
     {
-        return { &oscAFine,   &oscBFine,  &oscAPulseWidth,  &oscBPulseWidth, &oscALevel,      &oscBLevel,
-                 &cutoffLog2, &resonance, &filterEnvAmount, &keyTrack,       &velToFilterEnv, &masterGain };
+        Voice* released = nullptr;
+        Voice* oldest = nullptr;
+        for (auto& v : voices)
+        {
+            if (v.isStealing())
+                continue; // уже затухает — его не трогаем, пока есть другие кандидаты
+            if (!v.isGateOn() && (released == nullptr || v.getReleaseOrder() < released->getReleaseOrder()))
+                released = &v;
+            if (oldest == nullptr || v.getNoteOnOrder() < oldest->getNoteOnOrder())
+                oldest = &v;
+        }
+        if (released != nullptr)
+            return *released;
+        if (oldest != nullptr)
+            return *oldest;
+
+        // Все 8 голосов уже затухают (9+ нот за 4 мс): подменяем ожидающую ноту у самого старого.
+        Voice* any = &voices[0];
+        for (auto& v : voices)
+            if (v.getNoteOnOrder() < any->getNoteOnOrder())
+                any = &v;
+        return *any;
     }
 
-    Voice voice;
+    std::array<LinearSmoother*, 14> smoothers() noexcept
+    {
+        return { &oscAFine,       &oscBFine,  &oscAPulseWidth, &oscBPulseWidth, &oscALevel,
+                 &oscBLevel,      &cutoffLog2, &resonance,     &filterEnvAmount, &keyTrack,
+                 &velToFilterEnv, &velToAmp,   &pitchBend,     &masterGain };
+    }
+
+    std::array<Voice, kNumVoices> voices;
+    std::uint64_t eventCounter = 0;
+
     int oscACoarse = 0, oscBCoarse = 0;
     LinearSmoother oscAFine, oscBFine, oscAPulseWidth, oscBPulseWidth, oscALevel, oscBLevel;
     LinearSmoother cutoffLog2, resonance, filterEnvAmount, keyTrack, velToFilterEnv;
-    LinearSmoother masterGain;
+    LinearSmoother velToAmp;
+    LinearSmoother pitchBend, masterGain;
     bool firstParams = true;
+
+    double bendNormalized = 0.0;
+    double bendRange = 2.0;
+    double modWheel = 0.0;
 };
 
 } // namespace neutron::dsp

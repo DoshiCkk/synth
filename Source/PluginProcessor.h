@@ -69,6 +69,8 @@ private:
         std::atomic<float>* ampDecay = nullptr;
         std::atomic<float>* ampSustain = nullptr;
         std::atomic<float>* ampRelease = nullptr;
+        std::atomic<float>* velToAmp = nullptr;
+        std::atomic<float>* pitchBendRange = nullptr;
         std::atomic<float>* masterVolume = nullptr;
     };
 

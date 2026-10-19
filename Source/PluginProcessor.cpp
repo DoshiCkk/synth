@@ -105,6 +105,8 @@ NeutronProcessor::NeutronProcessor()
     params.ampDecay = apvts.getRawParameterValue("amp_env_decay");
     params.ampSustain = apvts.getRawParameterValue("amp_env_sustain");
     params.ampRelease = apvts.getRawParameterValue("amp_env_release");
+    params.velToAmp = apvts.getRawParameterValue("amp_vel_sens");
+    params.pitchBendRange = apvts.getRawParameterValue("pitch_bend_range");
     params.masterVolume = apvts.getRawParameterValue("master_volume");
 }
 
@@ -132,6 +134,11 @@ Apvts::ParameterLayout NeutronProcessor::createParameterLayout()
     layout.add(timeParam("amp_env_decay", "Amp Env Decay", 20000.0f, 400.0f));
     layout.add(floatParam("amp_env_sustain", "Amp Env Sustain", { 0.0f, 1.0f }, 0.8f));
     layout.add(timeParam("amp_env_release", "Amp Env Release", 20000.0f, 350.0f));
+    layout.add(floatParam("amp_vel_sens", "Velocity > Amp", { 0.0f, 1.0f }, 0.7f));
+
+    layout.add(std::make_unique<juce::AudioParameterInt>(juce::ParameterID { "pitch_bend_range", 1 },
+                                                         "Pitch Bend Range", 0, 12, 2,
+                                                         juce::AudioParameterIntAttributes().withLabel("st")));
 
     layout.add(floatParam("master_volume", "Master Volume", { -60.0f, 6.0f, 0.1f }, -6.0f, "dB"));
 
@@ -140,12 +147,15 @@ Apvts::ParameterLayout NeutronProcessor::createParameterLayout()
 
 void NeutronProcessor::prepareToPlay(double sampleRate, int)
 {
+    // Буферов у синта нет: голоса — фиксированный массив, рендер идёт прямо в буфер хоста.
     voiceManager.prepare(sampleRate);
+    voiceManager.reset();
     updateSynthParams();
 }
 
 void NeutronProcessor::releaseResources()
 {
+    voiceManager.reset();
 }
 
 bool NeutronProcessor::isBusesLayoutSupported(const BusesLayout& layouts) const
@@ -168,6 +178,8 @@ void NeutronProcessor::updateSynthParams() noexcept
                     load(params.filterSustain), load(params.filterRelease) * 0.001 };
     p.ampEnv = { load(params.ampAttack) * 0.001, load(params.ampDecay) * 0.001, load(params.ampSustain),
                  load(params.ampRelease) * 0.001 };
+    p.velToAmp = load(params.velToAmp);
+    p.pitchBendRange = loadInt(params.pitchBendRange);
     p.masterGain = juce::Decibels::decibelsToGain(load(params.masterVolume));
     voiceManager.setParams(p);
 }
@@ -192,6 +204,23 @@ void NeutronProcessor::handleMidi(const juce::uint8* data, int numBytes) noexcep
 
         case 0x80:
             voiceManager.noteOff(d1);
+            break;
+
+        case 0xE0:
+        {
+            // 14 бит: 0..16383, центр 8192. Делим на 8192 и обрезаем верх (8191/8192 ≈ +1).
+            const int value = (d2 << 7) | d1;
+            voiceManager.setPitchBend(juce::jlimit(-1.0, 1.0, (value - 8192) / 8192.0));
+            break;
+        }
+
+        case 0xB0:
+            if (d1 == 1)
+                voiceManager.setModWheel(d2 / 127.0);
+            else if (d1 == 120)
+                voiceManager.allSoundOff();
+            else if (d1 == 123)
+                voiceManager.allNotesOff();
             break;
 
         default:

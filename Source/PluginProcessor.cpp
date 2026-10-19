@@ -14,6 +14,11 @@ juce::NormalisableRange<float> logRange(float min, float max)
              [](float start, float end, float v) { return juce::jlimit(start, end, v); } };
 }
 
+juce::String formatHz(float hz, int)
+{
+    return hz < 1000.0f ? juce::String(hz, 1) + " Hz" : juce::String(hz / 1000.0f, 2) + " kHz";
+}
+
 juce::String formatMs(float ms, int)
 {
     return ms < 1000.0f ? juce::String(ms, 1) + " ms" : juce::String(ms / 1000.0f, 2) + " s";
@@ -86,6 +91,16 @@ NeutronProcessor::NeutronProcessor()
     bindOsc(params.oscA, "osc_a");
     bindOsc(params.oscB, "osc_b");
 
+    params.cutoff = apvts.getRawParameterValue("filter_cutoff");
+    params.resonance = apvts.getRawParameterValue("filter_resonance");
+    params.filterEnvAmount = apvts.getRawParameterValue("filter_env_amount");
+    params.keyTrack = apvts.getRawParameterValue("filter_key_track");
+    params.velToFilterEnv = apvts.getRawParameterValue("filter_vel_amount");
+    params.filterAttack = apvts.getRawParameterValue("filter_env_attack");
+    params.filterDecay = apvts.getRawParameterValue("filter_env_decay");
+    params.filterSustain = apvts.getRawParameterValue("filter_env_sustain");
+    params.filterRelease = apvts.getRawParameterValue("filter_env_release");
+
     params.ampAttack = apvts.getRawParameterValue("amp_env_attack");
     params.ampDecay = apvts.getRawParameterValue("amp_env_decay");
     params.ampSustain = apvts.getRawParameterValue("amp_env_sustain");
@@ -99,6 +114,19 @@ Apvts::ParameterLayout NeutronProcessor::createParameterLayout()
 
     addOscParams(layout, "osc_a", "Osc A", 0.0f, 1.0f);
     addOscParams(layout, "osc_b", "Osc B", 7.0f, 0.5f);
+
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID { "filter_cutoff", 1 }, "Filter Cutoff", logRange(20.0f, 20000.0f), 3000.0f,
+        juce::AudioParameterFloatAttributes().withStringFromValueFunction(formatHz)));
+    layout.add(floatParam("filter_resonance", "Filter Resonance", { 0.0f, 1.0f }, 0.15f));
+    layout.add(floatParam("filter_env_amount", "Filter Env Amount", { -1.0f, 1.0f }, 0.35f));
+    layout.add(floatParam("filter_key_track", "Filter Key Track", { 0.0f, 100.0f, 0.1f }, 50.0f, "%"));
+    layout.add(floatParam("filter_vel_amount", "Velocity > Filter Env", { 0.0f, 1.0f }, 0.3f));
+
+    layout.add(timeParam("filter_env_attack", "Filter Env Attack", 10000.0f, 2.0f));
+    layout.add(timeParam("filter_env_decay", "Filter Env Decay", 20000.0f, 600.0f));
+    layout.add(floatParam("filter_env_sustain", "Filter Env Sustain", { 0.0f, 1.0f }, 0.25f));
+    layout.add(timeParam("filter_env_release", "Filter Env Release", 20000.0f, 400.0f));
 
     layout.add(timeParam("amp_env_attack", "Amp Env Attack", 10000.0f, 2.0f));
     layout.add(timeParam("amp_env_decay", "Amp Env Decay", 20000.0f, 400.0f));
@@ -131,6 +159,13 @@ void NeutronProcessor::updateSynthParams() noexcept
     neutron::dsp::SynthParams p;
     p.oscA = readOsc(params.oscA);
     p.oscB = readOsc(params.oscB);
+    p.cutoffHz = load(params.cutoff);
+    p.resonance = load(params.resonance);
+    p.filterEnvAmount = load(params.filterEnvAmount);
+    p.keyTrack = load(params.keyTrack) * 0.01;
+    p.velToFilterEnv = load(params.velToFilterEnv);
+    p.filterEnv = { load(params.filterAttack) * 0.001, load(params.filterDecay) * 0.001,
+                    load(params.filterSustain), load(params.filterRelease) * 0.001 };
     p.ampEnv = { load(params.ampAttack) * 0.001, load(params.ampDecay) * 0.001, load(params.ampSustain),
                  load(params.ampRelease) * 0.001 };
     p.masterGain = juce::Decibels::decibelsToGain(load(params.masterVolume));

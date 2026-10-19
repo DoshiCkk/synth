@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cmath>
 
 #include "Smoother.h"
 #include "Voice.h"
@@ -23,11 +24,19 @@ struct SynthParams
 {
     OscSettings oscA;
     OscSettings oscB;
+
+    double cutoffHz = 20000.0;
+    double resonance = 0.0;       // 0..1
+    double filterEnvAmount = 0.0; // −1..+1
+    double keyTrack = 0.0;        // 0..1
+    double velToFilterEnv = 0.0;  // 0..1
+    EnvelopeSettings filterEnv;
+
     EnvelopeSettings ampEnv;
     double masterGain = 0.5; // линейный
 };
 
-// Пока один голос (шаг 3). Полифония и кража — на шаге 5.
+// Пока один голос (шаг 4). Полифония и кража — на шаге 5.
 class VoiceManager
 {
 public:
@@ -45,7 +54,7 @@ public:
     void setParams(const SynthParams& p) noexcept
     {
         voice.setWaveforms(p.oscA.wave, p.oscB.wave);
-        voice.setAmpEnvelope(p.ampEnv);
+        voice.setEnvelopes(p.filterEnv, p.ampEnv);
 
         // Октава и полутоны переключаются мгновенно (как галетный переключатель),
         // плавно идёт только fine — иначе смена октавы звучала бы как мини-глайд.
@@ -58,6 +67,15 @@ public:
         oscBPulseWidth.setTarget(p.oscB.pulseWidth);
         oscALevel.setTarget(p.oscA.level);
         oscBLevel.setTarget(p.oscB.level);
+
+        // Срез сглаживаем в октавах (log2), а не в Гц: иначе рампа 100 Гц → 10 кГц
+        // почти всё время провела бы в верхней октаве.
+        cutoffLog2.setTarget(std::log2(p.cutoffHz));
+        resonance.setTarget(p.resonance);
+        filterEnvAmount.setTarget(p.filterEnvAmount);
+        keyTrack.setTarget(p.keyTrack);
+        velToFilterEnv.setTarget(p.velToFilterEnv);
+
         masterGain.setTarget(p.masterGain);
 
         if (firstParams) // после prepare не «въезжаем» в значения из нуля
@@ -68,7 +86,7 @@ public:
         }
     }
 
-    void noteOn(int note, float /*velocity*/) noexcept { voice.noteOn(note); }
+    void noteOn(int note, float velocity) noexcept { voice.noteOn(note, velocity); }
 
     void noteOff(int note) noexcept
     {
@@ -88,6 +106,11 @@ public:
             frame.oscBPulseWidth = oscBPulseWidth.next();
             frame.oscALevel = static_cast<float>(oscALevel.next());
             frame.oscBLevel = static_cast<float>(oscBLevel.next());
+            frame.cutoffLog2 = cutoffLog2.next();
+            frame.resonance = resonance.next();
+            frame.filterEnvAmount = filterEnvAmount.next();
+            frame.keyTrack = keyTrack.next();
+            frame.velToFilterEnv = velToFilterEnv.next();
             const float gain = static_cast<float>(masterGain.next());
 
             const float sample = voice.isActive() ? voice.process(frame) : 0.0f;
@@ -98,14 +121,17 @@ public:
 private:
     static constexpr double kSmoothingSeconds = 0.02;
 
-    std::array<LinearSmoother*, 7> smoothers() noexcept
+    std::array<LinearSmoother*, 12> smoothers() noexcept
     {
-        return { &oscAFine, &oscBFine, &oscAPulseWidth, &oscBPulseWidth, &oscALevel, &oscBLevel, &masterGain };
+        return { &oscAFine,   &oscBFine,  &oscAPulseWidth,  &oscBPulseWidth, &oscALevel,      &oscBLevel,
+                 &cutoffLog2, &resonance, &filterEnvAmount, &keyTrack,       &velToFilterEnv, &masterGain };
     }
 
     Voice voice;
     int oscACoarse = 0, oscBCoarse = 0;
-    LinearSmoother oscAFine, oscBFine, oscAPulseWidth, oscBPulseWidth, oscALevel, oscBLevel, masterGain;
+    LinearSmoother oscAFine, oscBFine, oscAPulseWidth, oscBPulseWidth, oscALevel, oscBLevel;
+    LinearSmoother cutoffLog2, resonance, filterEnvAmount, keyTrack, velToFilterEnv;
+    LinearSmoother masterGain;
     bool firstParams = true;
 };
 

@@ -56,6 +56,15 @@ private:
     struct ParamPointers
     {
         OscPointers oscA, oscB;
+        std::atomic<float>* cutoff = nullptr;
+        std::atomic<float>* resonance = nullptr;
+        std::atomic<float>* filterEnvAmount = nullptr;
+        std::atomic<float>* keyTrack = nullptr;
+        std::atomic<float>* velToFilterEnv = nullptr;
+        std::atomic<float>* filterAttack = nullptr;
+        std::atomic<float>* filterDecay = nullptr;
+        std::atomic<float>* filterSustain = nullptr;
+        std::atomic<float>* filterRelease = nullptr;
         std::atomic<float>* ampAttack = nullptr;
         std::atomic<float>* ampDecay = nullptr;
         std::atomic<float>* ampSustain = nullptr;

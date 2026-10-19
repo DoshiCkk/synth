@@ -2,6 +2,8 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
+#include "dsp/VoiceManager.h"
+
 class NeutronProcessor final : public juce::AudioProcessor
 {
 public:
@@ -36,6 +38,23 @@ public:
 
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
+
+    void updateSynthParams() noexcept;
+    void handleMidi(const juce::uint8* data, int numBytes) noexcept;
+
+    // Указатели на атомарные значения параметров: чтение из аудиопотока без блокировок.
+    struct ParamPointers
+    {
+        std::atomic<float>* oscALevel = nullptr;
+        std::atomic<float>* ampAttack = nullptr;
+        std::atomic<float>* ampDecay = nullptr;
+        std::atomic<float>* ampSustain = nullptr;
+        std::atomic<float>* ampRelease = nullptr;
+        std::atomic<float>* masterVolume = nullptr;
+    };
+
+    ParamPointers params;
+    neutron::dsp::VoiceManager voiceManager;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(NeutronProcessor)
 };
